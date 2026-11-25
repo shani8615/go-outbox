@@ -62,9 +62,13 @@ func (p *Postgres) Enqueue(ctx context.Context, tx Execer, msgs ...Message) erro
 		if err != nil {
 			return err
 		}
+		payload := m.Payload
+		if payload == nil {
+			payload = []byte{} // drivers send nil []byte as NULL; payload is NOT NULL
+		}
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO `+p.table+` (topic, msg_key, payload, headers) VALUES ($1, $2, $3, $4)`,
-			m.Topic, m.Key, m.Payload, hb)
+			m.Topic, m.Key, payload, hb)
 		if err != nil {
 			return fmt.Errorf("outbox: enqueue: %w", err)
 		}
