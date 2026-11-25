@@ -2,6 +2,10 @@
 
 [![ci](https://github.com/shani8615/go-outbox/actions/workflows/ci.yml/badge.svg)](https://github.com/shani8615/go-outbox/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/shani8615/go-outbox.svg)](https://pkg.go.dev/github.com/shani8615/go-outbox)
+[![Go Report Card](https://goreportcard.com/badge/github.com/shani8615/go-outbox)](https://goreportcard.com/report/github.com/shani8615/go-outbox)
+[![Release](https://img.shields.io/github/v/release/shani8615/go-outbox?sort=semver)](https://github.com/shani8615/go-outbox/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/shani8615/go-outbox)](go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 The **transactional outbox pattern** for Go + PostgreSQL. It works with any broker: NATS, Kafka, RabbitMQ, SQS.
 
@@ -70,6 +74,19 @@ docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16
 cd integration && go mod tidy
 OUTBOX_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable go test -race ./...
 ```
+
+## Why go-outbox?
+
+Several Go outbox libraries exist, including Watermill's forwarder (if you already use [Watermill](https://github.com/ThreeDotsLabs/watermill)) and driver-specific ones like [pgx-outbox](https://github.com/nikolayk812/pgx-outbox). go-outbox's choices:
+
+- **`database/sql`**, so it works with pgx's stdlib driver, lib/pq, or anything else, inside the transaction you already have.
+- **Any broker** through a one-function `Publisher`: NATS JetStream, Kafka, RabbitMQ, SQS, HTTP.
+- **Several relays at once** with `FOR UPDATE SKIP LOCKED`, without double-claiming.
+- **Ordering preserved** by stopping the batch on the first failure.
+- **Poison messages parked** after `MaxAttempts`, with `last_error` recorded.
+- **No dependencies**, with integration tests against a real Postgres in CI.
+
+If your stack is already Watermill, use its forwarder. go-outbox is for when you want just the outbox and nothing else.
 
 ## License
 
