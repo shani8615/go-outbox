@@ -32,6 +32,6 @@ jobs:
         with:
           go-version: "1.24"
       - working-directory: integration
-        run: go mod tidy && go test -race -v ./...
+        run: go mod tidy && go test -race -v -timeout 2m ./...
         env:
           OUTBOX_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
