@@ -46,6 +46,35 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+// enqueue commits msgs in their own transaction, failing the test on error.
+func enqueue(t *testing.T, db *sql.DB, store *Postgres, msgs ...Message) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Enqueue(ctx, tx, msgs...); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// claim claims a batch and always releases it when the test ends, so a
+// failing assertion can't leave row locks behind and hang later tests.
+func claim(t *testing.T, store *Postgres, limit int) Batch {
+	t.Helper()
+	b, err := store.Claim(context.Background(), limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.Rollback() })
+	return b
+}
+
 func TestPostgresCommitAndRollback(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -90,27 +119,29 @@ func TestPostgresCommitAndRollback(t *testing.T) {
 
 func TestPostgresSkipLocked(t *testing.T) {
 	db := openTestDB(t)
-	ctx := context.Background()
 	store, _ := NewPostgres(db, "outbox_test")
-	tx, _ := db.BeginTx(ctx, nil)
 	for i := 0; i < 5; i++ {
-		_ = store.Enqueue(ctx, tx, Message{Topic: "t"})
+		enqueue(t, db, store, Message{Topic: "t", Payload: []byte("x")})
 	}
-	_ = tx.Commit()
 
-	b1, err := store.Claim(ctx, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b2, err := store.Claim(ctx, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
+	b1 := claim(t, store, 3)
+	b2 := claim(t, store, 3)
 	if len(b1.Messages()) != 3 || len(b2.Messages()) != 2 {
 		t.Fatalf("b1=%d b2=%d", len(b1.Messages()), len(b2.Messages()))
 	}
-	_ = b1.Rollback()
-	_ = b2.Rollback()
+}
+
+// Regression: a nil payload was sent to Postgres as NULL and violated the
+// NOT NULL constraint, so Enqueue failed for events without a body.
+func TestPostgresNilPayload(t *testing.T) {
+	db := openTestDB(t)
+	store, _ := NewPostgres(db, "outbox_test")
+	enqueue(t, db, store, Message{Topic: "t"})
+
+	b := claim(t, store, 10)
+	if len(b.Messages()) != 1 || len(b.Messages()[0].Payload) != 0 {
+		t.Fatalf("messages=%+v", b.Messages())
+	}
 }
 
 func TestPostgresParksAfterMaxAttempts(t *testing.T) {
@@ -118,21 +149,16 @@ func TestPostgresParksAfterMaxAttempts(t *testing.T) {
 	ctx := context.Background()
 	store, _ := NewPostgres(db, "outbox_test")
 	store.MaxAttempts = 2
-	tx, _ := db.BeginTx(ctx, nil)
-	_ = store.Enqueue(ctx, tx, Message{Topic: "t"})
-	_ = tx.Commit()
+	enqueue(t, db, store, Message{Topic: "t", Payload: []byte("x")})
 
 	r := newRelay(store, PublisherFunc(func(context.Context, Message) error { return sql.ErrConnDone }), 10)
 	_, _ = r.ProcessOnce(ctx)
 	_, _ = r.ProcessOnce(ctx)
-	b, _ := store.Claim(ctx, 10)
-	defer func() { _ = b.Rollback() }()
-	if len(b.Messages()) != 0 {
+	if b := claim(t, store, 10); len(b.Messages()) != 0 {
 		t.Fatal("message should be parked after MaxAttempts failures")
 	}
 	var lastErr string
-	_ = db.QueryRow(`SELECT last_error FROM outbox_test`).Scan(&lastErr)
-	if lastErr == "" {
-		t.Fatal("last_error not recorded")
+	if err := db.QueryRow(`SELECT last_error FROM outbox_test`).Scan(&lastErr); err != nil || lastErr == "" {
+		t.Fatalf("last_error not recorded: %q err=%v", lastErr, err)
 	}
 }
